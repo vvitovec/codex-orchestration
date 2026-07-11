@@ -4,6 +4,12 @@ A configurable orchestration toolkit for OpenAI Codex and the GPT‑5.6 model fa
 
 It turns the strongest model into a control plane: the root agent understands the project, divides it into useful deliverables, routes each lane to Luna, Terra, or Sol, supervises the work, and verifies the integrated result. The root does not implement changes itself.
 
+## Why I built this
+
+GPT‑5.6 Ultra is positioned as the most capable Codex option for large projects. In my experience, though, it falls short in a few frustrating ways: it tends to give subagents the same heavyweight GPT‑5.6 setup at extreme reasoning effort, then orchestrates them one by one. Both choices can burn an absurd number of tokens without producing proportionally better work.
+
+That is why I built this: a **programmatic, scalable, and configurable** way to orchestrate your agents.
+
 ## Why use it?
 
 - Spend expensive reasoning at decision points instead of on routine edits.

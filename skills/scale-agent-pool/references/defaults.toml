@@ -1,0 +1,19 @@
+mode = "balanced"
+
+[pool]
+initial_concurrency = 3
+max_concurrency = 6
+max_pending_tasks = 0
+max_retries = 1
+job_timeout_seconds = 1800
+success_window = 10
+backoff_factor = 0.5
+circuit_breaker_failures = 5
+
+[writes]
+max_write_concurrency = 1
+allow_disjoint_parallel_writers = false
+
+[collection]
+persist_partial_results = true
+return_raw_logs = false

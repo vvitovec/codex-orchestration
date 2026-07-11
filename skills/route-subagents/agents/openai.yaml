@@ -1,0 +1,4 @@
+interface:
+  display_name: "Route Subagents"
+  short_description: "Match bounded work to GPT-5.6 agents"
+  default_prompt: "Classify this lane and choose the least expensive reliable GPT-5.6 agent and effort."

@@ -1,0 +1,28 @@
+{
+  "name": "codex-orchestration",
+  "version": "0.2.0",
+  "description": "Route GPT-5.6 subagents, compose bounded assignments, and integrate verified results without letting the root agent implement.",
+  "author": {
+    "name": "Viktor Vítovec"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "orchestration",
+    "subagents",
+    "delegation",
+    "gpt-5.6"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Orchestration",
+    "shortDescription": "Delegate bounded work to the right GPT-5.6 subagents",
+    "longDescription": "A configurable control-plane workflow for Codex. The root agent decomposes and supervises work while specialized Luna, Terra, and Sol agents explore, implement, review, and verify bounded deliverables, including large programmatic fan-out through an adaptive queue.",
+    "developerName": "Viktor Vítovec",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Orchestrate this task with bounded GPT-5.6 subagents and verify the integrated result"
+    ]
+  }
+}

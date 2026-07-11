@@ -1,0 +1,4 @@
+interface:
+  display_name: "Integrate and Verify"
+  short_description: "Accept, escalate, and verify delegated work"
+  default_prompt: "Review these subagent results and verify the integrated outcome without implementing from the root."

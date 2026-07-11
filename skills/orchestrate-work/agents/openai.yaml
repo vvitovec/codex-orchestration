@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate Work"
+  short_description: "Run a control-plane-only subagent workflow"
+  default_prompt: "Orchestrate this task through bounded subagents. Do not implement from the root thread."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compose Delegation"
+  short_description: "Write concise, bounded worker assignments"
+  default_prompt: "Turn this work item into a concise delegation contract with scope and verification."

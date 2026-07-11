@@ -1,38 +1,89 @@
 # Codex Orchestration
 
-A plugin-ready set of Codex skills and custom-agent presets for a GPT-5.6 control-plane workflow.
+A configurable orchestration toolkit for OpenAI Codex and the GPT‑5.6 model family.
 
-The root agent may inspect, decompose, synthesize, review, and verify. It must not implement edits. Implementation is delegated to one active writer by default; independent exploration and review may run in parallel.
+It turns the strongest model into a control plane: the root agent understands the project, divides it into useful deliverables, routes each lane to Luna, Terra, or Sol, supervises the work, and verifies the integrated result. The root does not implement changes itself.
 
-## Contents
+## Why use it?
 
-- `skills/orchestrate-work`: end-to-end control loop and task graph
-- `skills/route-subagents`: model, effort, and escalation policy
-- `skills/compose-delegation`: concise worker prompt contract
-- `skills/integrate-and-verify`: evidence review, follow-ups, and acceptance
-- `skills/scale-agent-pool`: programmatic batch fan-out with adaptive concurrency
-- `agents/`: Luna, Terra, and Sol custom-agent presets
-- `scripts/`: validation and personal-install helpers
+- Spend expensive reasoning at decision points instead of on routine edits.
+- Keep the root context clean by moving searches, logs, tests, and implementation into worker threads.
+- Avoid both delegation extremes: agents receive coherent deliverables, not single-line chores or entire unresolved codebases.
+- Keep one writer by default while parallelizing safe exploration, testing, and independent review.
+- Scale homogeneous workloads to tens of agents through a programmatic, rate-aware queue.
+- Update model routing independently from the stable orchestration workflow.
 
-## Install for local Codex
+## What is included?
 
-Run `./scripts/install-personal.sh` to copy the four skills and five agent presets into `~/.codex`. Existing destinations are refused rather than overwritten. Restart Codex after installation.
+Five cooperating skills:
 
-For a project-local installation, copy `agents/*.toml` into `.codex/agents/` and install or load the plugin through the Codex plugin workflow.
+- `orchestrate-work` — task graph and control loop
+- `route-subagents` — model, effort, and escalation policy
+- `compose-delegation` — short worker prompt contract
+- `integrate-and-verify` — evidence review and final acceptance
+- `scale-agent-pool` — large programmatic batch fan-out
 
-## Validate
+Five custom agents cover Luna implementation, Terra exploration and implementation, and Sol specialist/reviewer work.
+
+## Install
+
+```bash
+git clone https://github.com/vvitovec/codex-orchestration.git
+cd codex-orchestration
+./scripts/install-personal.sh
+```
+
+Restart Codex after installation. The installer copies skills to `~/.codex/skills` and agent presets to `~/.codex/agents`; it refuses to overwrite existing destinations.
+
+For project-only use, copy `agents/*.toml` into `<project>/.codex/agents/` and load or install the plugin using its `.codex-plugin/plugin.json` manifest.
+
+## Use
+
+Ask naturally and mention orchestration when you want it explicitly:
+
+```text
+Orchestrate this feature. Keep the root as the control plane, delegate all
+implementation, use the cheapest reliable GPT-5.6 workers, and verify the
+integrated result.
+```
+
+The skills can also trigger from requests for subagents, delegation, parallel work, or large homogeneous batches.
+
+### Configure scale
+
+Copy the example configuration:
+
+```bash
+mkdir -p .codex
+cp config/orchestration.example.toml .codex/orchestration.toml
+```
+
+Choose one mode:
+
+| Mode | Intended use |
+|---|---|
+| `conservative` | Small or quota-sensitive work |
+| `balanced` | Default projects |
+| `large` | Tens of independent workers |
+| `adaptive-unrestricted` | No toolkit-defined job-count ceiling |
+
+`adaptive-unrestricted` is not infinite simultaneous spawning. It continuously replenishes available slots and backs off when Codex, the model provider, tools, rate limits, or hardware impose a ceiling. Homogeneous workloads use Codex's `spawn_agents_on_csv` batch primitive when available.
+
+Write concurrency remains `1` by default. Enable parallel writers only for provably disjoint ownership scopes.
+
+## Model routing
+
+- **Luna:** narrow, high-volume, automatically verifiable work
+- **Terra:** context-heavy exploration and bounded subsystem implementation
+- **Sol:** architecture, security, concurrency, difficult debugging, and critical review
+
+The complete and updateable matrix is in `skills/route-subagents/references/model-matrix.md`.
+
+## Verify or contribute
 
 ```bash
 python3 scripts/validate.py
 python3 -m unittest discover -s tests -v
 ```
 
-## Update policy
-
-Model-specific routing is centralized in `skills/route-subagents/references/model-matrix.md`. Refresh that file first when model behavior or Codex spawning changes. Keep stable delegation and verification contracts unchanged unless testing shows a workflow defect.
-
-## Scale modes
-
-Copy `config/orchestration.example.toml` to `.codex/orchestration.toml` or `~/.codex/orchestration.toml` and choose `conservative`, `balanced`, `large`, or `adaptive-unrestricted`.
-
-`adaptive-unrestricted` does not launch an infinite number of agents simultaneously. It removes the plugin's task-count ceiling and uses a replenishing queue whose live concurrency is still bounded by Codex `agents.max_threads`, rate limits, available resources, and backoff. For homogeneous work, the orchestrator uses Codex's programmatic `spawn_agents_on_csv` primitive instead of manually issuing one spawn per row.
+The package uses the MIT License. Routing defaults are intentionally isolated so new model behavior can be incorporated without rewriting the entire workflow.

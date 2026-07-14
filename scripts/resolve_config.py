@@ -3,17 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULTS = ROOT / "skills/scale-agent-pool/references/defaults.toml"
-MODES = {
-    "conservative": {"initial_concurrency": 2, "max_concurrency": 3},
-    "balanced": {"initial_concurrency": 3, "max_concurrency": 6},
-    "large": {"initial_concurrency": 8, "max_concurrency": 32},
-    "adaptive-unrestricted": {"initial_concurrency": 4, "max_concurrency": 0},
-}
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_DEFAULTS = SCRIPT_DIR.parent / "skills/scale-agent-pool/references/defaults.toml"
+INSTALLED_DEFAULTS = SCRIPT_DIR.parent / "config/defaults.toml"
+MODES = {"conservative": 2, "balanced": 3, "large": 8}
 
 
 def merge(base: dict, override: dict) -> dict:
@@ -31,37 +28,68 @@ def load(path: Path) -> dict:
         return tomllib.load(handle)
 
 
-def resolve(path: Path | None = None) -> dict:
-    config = load(DEFAULTS)
-    if path:
-        config = merge(config, load(path))
+def defaults_path() -> Path:
+    for candidate in (REPO_DEFAULTS, INSTALLED_DEFAULTS):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("orchestration defaults.toml not found beside repository or installation")
+
+
+def config_paths(
+    explicit: Path | None = None, cwd: Path | None = None, codex_home: Path | None = None,
+) -> list[Path]:
+    cwd = (cwd or Path.cwd()).resolve()
+    if codex_home is None:
+        codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    if explicit and not explicit.expanduser().is_file():
+        raise FileNotFoundError(f"explicit config does not exist: {explicit}")
+    paths = [codex_home / "orchestration.toml", cwd / ".codex/orchestration.toml"]
+    if explicit:
+        paths.append(explicit.expanduser().resolve())
+    result: list[Path] = []
+    for path in paths:
+        if path.is_file() and path not in result:
+            result.append(path)
+    return result
+
+
+def resolve(
+    path: Path | None = None, cwd: Path | None = None, codex_home: Path | None = None,
+) -> dict:
+    config = load(defaults_path())
+    overrides: dict = {}
+    sources = [defaults_path()]
+    for candidate in config_paths(path, cwd, codex_home):
+        value = load(candidate)
+        overrides = merge(overrides, value)
+        config = merge(config, value)
+        sources.append(candidate)
+
     mode = config.get("mode")
     if mode not in MODES:
         raise ValueError(f"unknown mode: {mode}")
     pool = config.setdefault("pool", {})
-    supplied = load(path).get("pool", {}) if path else {}
-    for key, value in MODES[mode].items():
-        if key not in supplied:
-            pool[key] = value
-    integers = (
-        "initial_concurrency", "max_concurrency", "max_pending_tasks", "max_retries",
-        "job_timeout_seconds", "success_window", "circuit_breaker_failures",
-    )
-    for key in integers:
+    if "concurrency" not in overrides.get("pool", {}):
+        pool["concurrency"] = MODES[mode]
+    for key in ("concurrency", "max_retries", "job_timeout_seconds"):
         value = pool.get(key)
-        if not isinstance(value, int) or value < 0:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"pool.{key} must be a non-negative integer")
-    if pool["initial_concurrency"] < 1:
-        raise ValueError("pool.initial_concurrency must be at least 1")
-    cap = pool["max_concurrency"]
-    if cap and pool["initial_concurrency"] > cap:
-        raise ValueError("initial_concurrency cannot exceed max_concurrency")
-    factor = pool.get("backoff_factor")
-    if not isinstance(factor, (int, float)) or not 0 < factor < 1:
-        raise ValueError("pool.backoff_factor must be between 0 and 1")
+    if pool["concurrency"] < 1 or pool["job_timeout_seconds"] < 1:
+        raise ValueError("pool concurrency and timeout must be at least 1")
+    backoff = pool.get("retry_backoff_seconds")
+    if not isinstance(backoff, (int, float)) or isinstance(backoff, bool) or backoff < 0:
+        raise ValueError("pool.retry_backoff_seconds must be non-negative")
     writes = config.get("writes", {})
-    if not isinstance(writes.get("max_write_concurrency"), int) or writes["max_write_concurrency"] < 1:
+    write_concurrency = writes.get("max_write_concurrency")
+    if not isinstance(write_concurrency, int) or isinstance(write_concurrency, bool) or write_concurrency < 1:
         raise ValueError("writes.max_write_concurrency must be at least 1")
+    if write_concurrency > pool["concurrency"]:
+        raise ValueError("write concurrency cannot exceed total concurrency")
+    runner = config.get("runner", {})
+    if not isinstance(runner.get("run_root"), str) or not runner["run_root"]:
+        raise ValueError("runner.run_root must be a non-empty string")
+    config["_sources"] = [str(source) for source in sources]
     return config
 
 

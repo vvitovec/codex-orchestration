@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -47,8 +48,8 @@ class PackageTests(unittest.TestCase):
         text = (ROOT / "skills/scale-agent-pool/SKILL.md").read_text()
         self.assertIn("scripts/orchestrate.py", text)
         self.assertIn("command/config accepted, not runtime-attested", text)
-        self.assertIn("adaptive-unrestricted", text)
-        self.assertIn("Never interpret unrestricted as launching all pending jobs simultaneously", text)
+        self.assertIn("fixed concurrency defaults", text)
+        self.assertIn("does not currently adapt live concurrency", text)
 
     def test_config_modes(self):
         resolver_spec = importlib.util.spec_from_file_location("resolver", ROOT / "scripts/resolve_config.py")
@@ -57,7 +58,27 @@ class PackageTests(unittest.TestCase):
         resolver_spec.loader.exec_module(resolver)
         default = resolver.resolve()
         self.assertEqual(default["mode"], "balanced")
+        self.assertEqual(default["pool"]["concurrency"], 3)
         self.assertEqual(default["writes"]["max_write_concurrency"], 1)
+
+    def test_config_precedence(self):
+        resolver_spec = importlib.util.spec_from_file_location("resolver_precedence", ROOT / "scripts/resolve_config.py")
+        resolver = importlib.util.module_from_spec(resolver_spec)
+        assert resolver_spec.loader
+        resolver_spec.loader.exec_module(resolver)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            project = root / "project"
+            (project / ".codex").mkdir(parents=True)
+            home.mkdir()
+            (home / "orchestration.toml").write_text("[pool]\nconcurrency = 4\n")
+            (project / ".codex/orchestration.toml").write_text("[pool]\nconcurrency = 5\n")
+            explicit = root / "explicit.toml"
+            explicit.write_text("[pool]\nconcurrency = 6\n")
+            config = resolver.resolve(explicit, cwd=project, codex_home=home)
+            self.assertEqual(config["pool"]["concurrency"], 6)
+            self.assertEqual(len(config["_sources"]), 4)
 
 
 if __name__ == "__main__":

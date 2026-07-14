@@ -1,4 +1,4 @@
 interface:
   display_name: "Scale Agent Pool"
-  short_description: "Run large adaptive programmatic subagent batches"
-  default_prompt: "Process these independent items through a configurable adaptive subagent pool and return structured results."
+  short_description: "Run large bounded programmatic subagent batches"
+  default_prompt: "Process these independent items through a configurable bounded subagent pool and return structured results."

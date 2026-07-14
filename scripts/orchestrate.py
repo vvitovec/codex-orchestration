@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -29,6 +31,16 @@ APP_CODEX_PATHS = (
     Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
     Path("/Applications/Codex.app/Contents/Resources/codex"),
 )
+
+
+def load_config(path: Path | None = None) -> dict[str, Any]:
+    resolver_path = Path(__file__).with_name("resolve_config.py")
+    spec = importlib.util.spec_from_file_location("orchestration_resolve_config", resolver_path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"cannot load config resolver: {resolver_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.resolve(path)
 
 
 def utc_now() -> str:
@@ -110,19 +122,22 @@ class Job:
     effort: str
     sandbox: str
     workdir: Path
+    safe_retry: bool = False
 
     @property
     def fingerprint(self) -> str:
         payload = {
             "id": self.id, "prompt": self.prompt, "model": self.model,
             "effort": self.effort, "sandbox": self.sandbox, "workdir": str(self.workdir),
+            "safe_retry": self.safe_retry,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
-    def public_spec(self) -> dict[str, str]:
+    def public_spec(self) -> dict[str, Any]:
         return {
             "id": self.id, "model": self.model, "effort": self.effort,
             "sandbox": self.sandbox, "workdir": str(self.workdir),
+            "safe_retry": self.safe_retry,
             "prompt_sha256": hashlib.sha256(self.prompt.encode()).hexdigest(),
         }
 
@@ -131,6 +146,7 @@ def load_jobs(path: Path) -> list[Job]:
     jobs: list[Job] = []
     ids: set[str] = set()
     required = {"id", "prompt", "model", "effort", "sandbox", "workdir"}
+    optional = {"safe_retry"}
     for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not raw.strip():
             continue
@@ -141,7 +157,7 @@ def load_jobs(path: Path) -> list[Job]:
         if not isinstance(value, dict):
             raise ValueError(f"{path}:{line_number}: each job must be an object")
         missing = required - value.keys()
-        extra = value.keys() - required
+        extra = value.keys() - required - optional
         if missing or extra:
             raise ValueError(f"{path}:{line_number}: missing={sorted(missing)} extra={sorted(extra)}")
         job_id = value["id"]
@@ -151,12 +167,15 @@ def load_jobs(path: Path) -> list[Job]:
             raise ValueError(f"{path}:{line_number}: duplicate id {job_id!r}")
         if not isinstance(value["prompt"], str) or not value["prompt"].strip():
             raise ValueError(f"{path}:{line_number}: prompt must be non-empty")
-        if value["model"] not in MODELS:
+        if not isinstance(value["model"], str) or value["model"] not in MODELS:
             raise ValueError(f"{path}:{line_number}: unsupported model {value['model']!r}")
-        if value["effort"] not in EFFORTS:
+        if not isinstance(value["effort"], str) or value["effort"] not in EFFORTS:
             raise ValueError(f"{path}:{line_number}: unsupported effort {value['effort']!r}")
-        if value["sandbox"] not in SANDBOXES:
+        if not isinstance(value["sandbox"], str) or value["sandbox"] not in SANDBOXES:
             raise ValueError(f"{path}:{line_number}: unsupported sandbox {value['sandbox']!r}")
+        safe_retry = value.get("safe_retry", False)
+        if not isinstance(safe_retry, bool):
+            raise ValueError(f"{path}:{line_number}: safe_retry must be a boolean")
         if not isinstance(value["workdir"], str) or not value["workdir"]:
             raise ValueError(f"{path}:{line_number}: workdir must be a path string")
         workdir = Path(value["workdir"]).expanduser()
@@ -165,7 +184,10 @@ def load_jobs(path: Path) -> list[Job]:
         if not workdir.is_dir():
             raise ValueError(f"{path}:{line_number}: workdir is not a directory: {workdir}")
         ids.add(job_id)
-        jobs.append(Job(job_id, value["prompt"], value["model"], value["effort"], value["sandbox"], workdir))
+        jobs.append(Job(
+            job_id, value["prompt"], value["model"], value["effort"],
+            value["sandbox"], workdir, safe_retry,
+        ))
     if not jobs:
         raise ValueError(f"{path}: no jobs")
     return jobs
@@ -195,6 +217,149 @@ def extract_thread_ids(events_path: Path) -> list[str]:
     return found
 
 
+def has_completed_turn(events_path: Path) -> bool:
+    if not events_path.exists():
+        return False
+    for raw in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        turn = event.get("turn")
+        status = turn.get("status") if isinstance(turn, dict) else event.get("status")
+        if status in {"failed", "cancelled", "canceled", "interrupted"}:
+            continue
+        return True
+    return False
+
+
+def artifact_metadata(path: Path) -> dict[str, Any] | None:
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return None
+    if not content.strip():
+        return None
+    return {"path": str(path), "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+
+
+def artifact_matches(entry: dict[str, Any]) -> bool:
+    artifact = entry.get("final_artifact")
+    if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str):
+        return False
+    current = artifact_metadata(Path(artifact["path"]))
+    return bool(
+        current
+        and current["size"] == artifact.get("size")
+        and current["sha256"] == artifact.get("sha256")
+    )
+
+
+class RunLock:
+    def __init__(self, path: Path):
+        self.path = path
+        self.handle: Any = None
+
+    def __enter__(self) -> "RunLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            self.handle.close()
+            self.handle = None
+            raise RuntimeError(f"run directory is already active: {self.path.parent}") from error
+        self.handle.seek(0)
+        self.handle.truncate()
+        self.handle.write(f"pid={os.getpid()} started_at={utc_now()}\n")
+        self.handle.flush()
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        if self.handle:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            self.handle.close()
+            self.handle = None
+
+
+class ProcessRegistry:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.processes: set[subprocess.Popen[bytes]] = set()
+        self.stopping = threading.Event()
+
+    def spawn(self, command: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        with self.lock:
+            if self.stopping.is_set():
+                raise RuntimeError("runner is stopping")
+            process = subprocess.Popen(command, **kwargs)
+            self.processes.add(process)
+            return process
+
+    def add(self, process: subprocess.Popen[bytes]) -> None:
+        with self.lock:
+            self.processes.add(process)
+
+    def discard(self, process: subprocess.Popen[bytes]) -> None:
+        with self.lock:
+            self.processes.discard(process)
+
+    def terminate_all(self) -> None:
+        self.stopping.set()
+        with self.lock:
+            processes = list(self.processes)
+        for process in processes:
+            if process.poll() is not None:
+                continue
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGTERM)
+                else:
+                    process.terminate()
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + 2
+        for process in processes:
+            remaining = max(0, deadline - time.monotonic())
+            try:
+                process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                try:
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+
+
+class SignalCleanup:
+    def __init__(self, registry: ProcessRegistry):
+        self.registry = registry
+        self.previous: dict[int, Any] = {}
+
+    def __enter__(self) -> "SignalCleanup":
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                self.previous[signum] = signal.getsignal(signum)
+                signal.signal(signum, self.handle)
+        return self
+
+    def handle(self, signum: int, _frame: Any) -> None:
+        self.registry.terminate_all()
+        raise KeyboardInterrupt(f"received signal {signum}")
+
+    def __exit__(self, *_: Any) -> None:
+        for signum, handler in self.previous.items():
+            signal.signal(signum, handler)
+
+
 class Manifest:
     def __init__(self, path: Path, jobs_path: Path, codex_path: Path, codex_version: str):
         self.path = path
@@ -207,10 +372,11 @@ class Manifest:
                 )
         else:
             self.data = {
-                "schema_version": 1, "created_at": utc_now(), "jobs_file": str(jobs_path.resolve()),
+                "schema_version": 2, "created_at": utc_now(), "jobs_file": str(jobs_path.resolve()),
                 "backend": "codex-exec", "codex": {"path": str(codex_path), "version": codex_version},
                 "route_attestation": ROUTE_ATTESTATION, "jobs": {},
             }
+        self.data["schema_version"] = 2
         self.data["updated_at"] = utc_now()
         atomic_json(self.path, self.data)
 
@@ -236,13 +402,20 @@ def build_command(binary: Path, job: Job, output_path: Path) -> list[str]:
 
 def run_job(
     job: Job, binary: Path, run_dir: Path, manifest: Manifest,
-    timeout: int, retries: int, backoff: float,
+    timeout: int, retries: int, backoff: float, registry: ProcessRegistry,
 ) -> bool:
     prior = manifest.get(job.id)
     attempts = list(prior.get("attempts", [])) if prior and prior.get("fingerprint") == job.fingerprint else []
     entry: dict[str, Any] = {
         "spec": job.public_spec(), "fingerprint": job.fingerprint, "status": "running",
         "route_attestation": ROUTE_ATTESTATION, "attempts": attempts,
+    }
+    retry_limit = retries if job.sandbox == "read-only" or job.safe_retry else 0
+    entry["retry_policy"] = {
+        "max_retries": retry_limit,
+        "reason": "read-only" if job.sandbox == "read-only" else (
+            "writer-explicitly-idempotent" if job.safe_retry else "writer-retries-disabled"
+        ),
     }
     manifest.set(job.id, entry)
     job_dir = run_dir / "jobs" / job.id
@@ -254,7 +427,7 @@ def run_job(
     ]
     next_attempt_no = max(existing_numbers, default=0) + 1
 
-    for retry_index in range(retries + 1):
+    for retry_index in range(retry_limit + 1):
         attempt_no = next_attempt_no + retry_index
         events_path = job_dir / f"attempt-{attempt_no:03d}.events.jsonl"
         stderr_path = job_dir / f"attempt-{attempt_no:03d}.stderr.log"
@@ -271,7 +444,7 @@ def run_job(
         timed_out = False
         try:
             with events_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-                process = subprocess.Popen(
+                process = registry.spawn(
                     command, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
                     start_new_session=(os.name == "posix"),
                 )
@@ -291,29 +464,47 @@ def run_job(
                         else:
                             process.kill()
                         process.wait()
+                finally:
+                    registry.discard(process)
                 returncode = process.returncode
         except OSError as error:
             returncode = 127
             stderr_path.write_text(str(error), encoding="utf-8")
 
+        completed_turn = has_completed_turn(events_path)
         attempt.update({
             "finished_at": utc_now(), "returncode": returncode,
-            "status": "timed_out" if timed_out else ("succeeded" if returncode == 0 else "failed"),
+            "turn_completed": completed_turn,
             "thread_ids": extract_thread_ids(events_path),
         })
+        artifact = None
         if temporary_output.exists():
             os.replace(temporary_output, final_output)
+            artifact = artifact_metadata(final_output)
             attempt["final_output"] = str(final_output)
-        if returncode == 0 and not timed_out:
+        if artifact:
+            attempt["final_artifact"] = artifact
+        succeeded = returncode == 0 and not timed_out and completed_turn and artifact is not None
+        attempt["status"] = "succeeded" if succeeded else (
+            "timed_out" if timed_out else (
+                "missing_completion_event" if returncode == 0 and not completed_turn else (
+                    "missing_final_output" if returncode == 0 and not artifact else "failed"
+                )
+            )
+        )
+        if succeeded:
             entry.update({
                 "status": "succeeded", "finished_at": utc_now(),
-                "final_output": attempt.get("final_output"), "thread_ids": attempt["thread_ids"],
+                "final_output": str(final_output), "final_artifact": artifact,
+                "thread_ids": attempt["thread_ids"],
             })
             manifest.set(job.id, entry)
             return True
         manifest.set(job.id, entry)
-        if retry_index < retries:
+        if retry_index < retry_limit and not registry.stopping.is_set():
             time.sleep(backoff * (2 ** retry_index))
+        elif registry.stopping.is_set():
+            break
 
     entry.update({"status": "failed", "finished_at": utc_now(), "terminal_error": attempts[-1]["status"]})
     manifest.set(job.id, entry)
@@ -323,6 +514,7 @@ def run_job(
 def run_pool(
     jobs: Iterable[Job], binary: Path, run_dir: Path, manifest: Manifest,
     concurrency: int, write_concurrency: int, timeout: int, retries: int, backoff: float,
+    registry: ProcessRegistry,
 ) -> bool:
     pending = list(jobs)
     running: dict[concurrent.futures.Future[bool], Job] = {}
@@ -340,7 +532,9 @@ def run_pool(
                 pending.pop(index)
                 if is_writer:
                     writer_count += 1
-                future = executor.submit(run_job, job, binary, run_dir, manifest, timeout, retries, backoff)
+                future = executor.submit(
+                    run_job, job, binary, run_dir, manifest, timeout, retries, backoff, registry
+                )
                 running[future] = job
             if not running:
                 raise RuntimeError("scheduler deadlock")
@@ -363,31 +557,47 @@ def run_pool(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("jobs", type=Path, help="JSONL job file")
+    parser.add_argument("--config", type=Path, help="highest-precedence TOML configuration")
     parser.add_argument("--run-dir", type=Path)
-    parser.add_argument("--concurrency", type=int, default=3)
-    parser.add_argument("--write-concurrency", type=int, default=1)
-    parser.add_argument("--timeout", type=int, default=1800)
-    parser.add_argument("--retries", type=int, default=1)
-    parser.add_argument("--backoff", type=float, default=2.0)
+    parser.add_argument("--concurrency", type=int)
+    parser.add_argument("--write-concurrency", type=int)
+    parser.add_argument("--timeout", type=int)
+    parser.add_argument("--retries", type=int)
+    parser.add_argument("--backoff", type=float)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    if args.concurrency < 1 or args.write_concurrency < 1 or args.write_concurrency > args.concurrency:
-        parser.error("concurrency values must be positive and write concurrency cannot exceed total")
-    if args.timeout < 1 or args.retries < 0 or args.backoff < 0:
-        parser.error("timeout must be positive; retries and backoff must be non-negative")
 
     try:
+        config = load_config(args.config)
         jobs = load_jobs(args.jobs)
         binary, version = select_codex_binary()
     except (OSError, ValueError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
-    run_dir = (args.run_dir or Path(".codex/orchestration-runs") / args.jobs.stem).resolve()
+    pool_config = config["pool"]
+    concurrency = args.concurrency if args.concurrency is not None else pool_config["concurrency"]
+    write_concurrency = (
+        args.write_concurrency if args.write_concurrency is not None
+        else config["writes"]["max_write_concurrency"]
+    )
+    timeout = args.timeout if args.timeout is not None else pool_config["job_timeout_seconds"]
+    retries = args.retries if args.retries is not None else pool_config["max_retries"]
+    backoff = args.backoff if args.backoff is not None else pool_config["retry_backoff_seconds"]
+    if concurrency < 1 or write_concurrency < 1 or write_concurrency > concurrency:
+        parser.error("concurrency values must be positive and write concurrency cannot exceed total")
+    if timeout < 1 or retries < 0 or backoff < 0:
+        parser.error("timeout must be positive; retries and backoff must be non-negative")
+    run_root = Path(config["runner"]["run_root"]).expanduser()
+    if not run_root.is_absolute():
+        run_root = Path.cwd() / run_root
+    run_dir = (args.run_dir or run_root / args.jobs.stem).resolve()
     if args.dry_run:
         result = {
             "backend": "codex-exec", "codex": {"path": str(binary), "version": version},
             "route_attestation": ROUTE_ATTESTATION, "run_dir": str(run_dir),
-            "concurrency": args.concurrency, "write_concurrency": args.write_concurrency,
+            "config_sources": config["_sources"],
+            "concurrency": concurrency, "write_concurrency": write_concurrency,
+            "timeout": timeout, "retries": retries, "backoff": backoff,
             "jobs": [job.public_spec() for job in jobs],
         }
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -395,24 +605,49 @@ def main(argv: list[str] | None = None) -> int:
 
     run_dir.mkdir(parents=True, exist_ok=True)
     try:
-        manifest = Manifest(run_dir / "manifest.json", args.jobs, binary, version)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        print(f"ERROR: could not open run manifest: {error}", file=sys.stderr)
+        run_lock = RunLock(run_dir / "run.lock")
+        run_lock.__enter__()
+    except (OSError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         return 2
-    selected: list[Job] = []
-    for job in jobs:
-        prior = manifest.get(job.id)
-        if prior and prior.get("status") == "succeeded" and prior.get("fingerprint") == job.fingerprint:
-            print(f"SKIP {job.id}: already succeeded")
-        else:
-            selected.append(job)
-    ok = run_pool(
-        selected, binary, run_dir, manifest, args.concurrency, args.write_concurrency,
-        args.timeout, args.retries, args.backoff,
-    ) if selected else True
-    succeeded = sum(1 for job in jobs if (manifest.get(job.id) or {}).get("status") == "succeeded")
-    print(f"{succeeded}/{len(jobs)} jobs succeeded; manifest: {manifest.path}")
-    return 0 if ok and succeeded == len(jobs) else 1
+    try:
+        try:
+            manifest = Manifest(run_dir / "manifest.json", args.jobs, binary, version)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"ERROR: could not open run manifest: {error}", file=sys.stderr)
+            return 2
+        selected: list[Job] = []
+        for job in jobs:
+            prior = manifest.get(job.id)
+            if (
+                prior and prior.get("status") == "succeeded"
+                and prior.get("fingerprint") == job.fingerprint and artifact_matches(prior)
+            ):
+                print(f"SKIP {job.id}: verified successful artifact")
+            else:
+                if prior and prior.get("status") == "succeeded":
+                    print(f"RERUN {job.id}: successful artifact missing, changed, or job changed")
+                selected.append(job)
+        registry = ProcessRegistry()
+        try:
+            with SignalCleanup(registry):
+                ok = run_pool(
+                    selected, binary, run_dir, manifest, concurrency, write_concurrency,
+                    timeout, retries, backoff, registry,
+                ) if selected else True
+        except KeyboardInterrupt:
+            registry.terminate_all()
+            print("INTERRUPTED: active Codex process groups terminated", file=sys.stderr)
+            return 130
+        succeeded = sum(
+            1 for job in jobs
+            if (entry := manifest.get(job.id))
+            and entry.get("status") == "succeeded" and artifact_matches(entry)
+        )
+        print(f"{succeeded}/{len(jobs)} jobs succeeded; manifest: {manifest.path}")
+        return 0 if ok and succeeded == len(jobs) else 1
+    finally:
+        run_lock.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

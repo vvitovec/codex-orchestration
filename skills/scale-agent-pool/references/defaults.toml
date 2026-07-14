@@ -1,14 +1,10 @@
 mode = "balanced"
 
 [pool]
-initial_concurrency = 3
-max_concurrency = 6
-max_pending_tasks = 0
+concurrency = 3
 max_retries = 1
 job_timeout_seconds = 1800
-success_window = 10
-backoff_factor = 0.5
-circuit_breaker_failures = 5
+retry_backoff_seconds = 2.0
 
 [writes]
 max_write_concurrency = 1

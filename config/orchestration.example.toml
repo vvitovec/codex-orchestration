@@ -1,19 +1,11 @@
-# conservative | balanced | large | adaptive-unrestricted
+# conservative | balanced | large
 mode = "balanced"
 
 [pool]
-# Used as the starting target. The runtime may enforce a lower cap.
-initial_concurrency = 3
-# 0 means no plugin-defined concurrency cap in adaptive-unrestricted mode.
-# Codex agents.max_threads and platform/resource limits still apply.
-max_concurrency = 6
-# 0 means no plugin-defined task-count ceiling.
-max_pending_tasks = 0
+concurrency = 3
 max_retries = 1
 job_timeout_seconds = 1800
-success_window = 10
-backoff_factor = 0.5
-circuit_breaker_failures = 5
+retry_backoff_seconds = 2.0
 
 [writes]
 max_write_concurrency = 1

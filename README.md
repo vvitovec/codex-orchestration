@@ -39,7 +39,7 @@ cd codex-orchestration
 ./scripts/install-personal.sh
 ```
 
-Restart Codex after installation. The installer copies skills to `~/.codex/skills`, agent presets to `~/.codex/agents`, and runner scripts to `~/.codex/orchestration/scripts`; it refuses to overwrite existing destinations.
+Restart Codex after installation. The installer copies skills to `~/.codex/skills`, agent presets to `~/.codex/agents`, runner scripts to `~/.codex/orchestration/scripts`, and its defaults beside the installed resolver. It refuses existing destinations on first install. Use `./scripts/install-personal.sh --upgrade` to replace destinations recorded as package-owned (or structurally verified from a legacy installation) while preserving unrelated files.
 
 For project-only use, copy `agents/*.toml` into `<project>/.codex/agents/` and load or install the plugin using its `.codex-plugin/plugin.json` manifest.
 
@@ -70,16 +70,15 @@ Choose one mode:
 |---|---|
 | `conservative` | Small or quota-sensitive work |
 | `balanced` | Default projects |
-| `large` | Tens of independent workers |
-| `adaptive-unrestricted` | No toolkit-defined job-count ceiling |
-
-`adaptive-unrestricted` is not infinite simultaneous spawning. It continuously replenishes available slots and backs off when Codex, the model provider, tools, rate limits, or hardware impose a ceiling.
+| `large` | A larger fixed pool for independent workers |
 
 Write concurrency remains `1` by default. Enable parallel writers only for provably disjoint ownership scopes.
 
+Configuration is resolved in this order: bundled defaults, `~/.codex/orchestration.toml` (or `$CODEX_HOME/orchestration.toml`), project `.codex/orchestration.toml`, then an explicit `--config` file. Explicit CLI flags take final precedence. The runner consumes concurrency, write concurrency, timeout, retries, retry backoff, and run root from the resolved configuration.
+
 ### Run a programmatic pool
 
-Jobs are strict JSONL. Each line contains a stable `id`, bounded `prompt`, allowlisted `model` and `effort`, sandbox, and working directory:
+Jobs are strict JSONL. Each line contains a stable `id`, bounded `prompt`, allowlisted `model` and `effort`, sandbox, and working directory. `safe_retry: true` is optional and must only be used for an idempotent workspace writer:
 
 ```json
 {"id":"repo-summary","prompt":"Inspect this repository without editing it. Return its purpose and verification commands.","model":"gpt-5.6-luna","effort":"low","sandbox":"read-only","workdir":"."}
@@ -100,8 +99,11 @@ The runner:
 - selects the newest compatible Codex CLI (minimum `0.144.2`) from the ChatGPT/Codex app bundle or `PATH`; set `CODEX_BIN=/path/to/codex` to override it;
 - sends prompts over stdin and builds subprocess arguments without a shell;
 - limits total concurrency and keeps one workspace writer by default;
-- writes an atomic manifest, JSONL events, stderr logs, final responses, and discovered thread IDs under `.codex/orchestration-runs/<job-file>/`;
-- retries with exponential backoff, enforces per-attempt timeouts, skips unchanged successful jobs on rerun, and exits nonzero for terminal failures.
+- takes an OS lock on each run directory and terminates active process groups on SIGINT/SIGTERM;
+- writes an atomic manifest, JSONL events, stderr logs, final responses, output hashes/sizes, and discovered thread IDs under `.codex/orchestration-runs/<job-file>/`;
+- accepts success only when the process exits zero, emits `turn.completed`, and creates a non-empty final output;
+- retries read-only jobs with exponential backoff, but never retries writers unless their job explicitly declares `safe_retry: true`;
+- skips only successful jobs whose output artifact still matches the persisted hash and size, and exits nonzero for terminal failures.
 
 The CLI route is deliberately labeled `requested-via-cli-arguments-not-runtime-attested`. It proves which command/configuration was launched, but current `codex exec --json` output does not prove the effective backend model and effort. Native interactive subagents remain useful for steering and follow-ups, but their current spawn interface cannot reliably enforce those fields either. An App Server backend with effective-route reporting is the intended next backend behind the same job/manifest contract.
 

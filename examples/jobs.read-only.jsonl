@@ -1,0 +1,1 @@
+{"id":"repo-summary","prompt":"Inspect this repository without editing it. Return a concise summary of its purpose, main entrypoints, and verification commands.","model":"gpt-5.6-luna","effort":"low","sandbox":"read-only","workdir":"."}

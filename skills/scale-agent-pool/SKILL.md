@@ -5,7 +5,7 @@ description: Run tens or more homogeneous Codex subagent jobs through a configur
 
 # Scale Agent Pool
 
-Use programmatic batch fan-out for a large collection of uniform, independent jobs. Prefer Codex `spawn_agents_on_csv` when available because it owns the spawn, concurrency, collection, timeout, and result-reporting loop.
+Use programmatic batch fan-out for a large collection of uniform, independent jobs. Prefer the plugin's durable `scripts/orchestrate.py` runner. It launches separate `codex exec` processes with explicit model, effort, sandbox, and working-directory arguments instead of relying on native subagent routing that may ignore those choices.
 
 ## Load configuration
 
@@ -29,15 +29,15 @@ Never interpret unrestricted as launching all pending jobs simultaneously. An un
 ## Batch protocol
 
 1. Confirm the jobs are homogeneous and independently verifiable.
-2. Materialize or identify a CSV with a stable `item_id`, input fields, ownership scope, and verifier.
-3. Define one short instruction template using `{column_name}` placeholders.
-4. Define a structured result schema with status, summary, evidence, checks, and blocker.
+2. Materialize JSONL jobs with exactly `id`, `prompt`, `model`, `effort`, `sandbox`, and `workdir` fields. Keep IDs stable across reruns.
+3. Use only the validated GPT-5.6 Luna/Terra/Sol routes and low/medium/high/xhigh effort.
+4. Encode ownership, verifier, and the requested structured return directly in each bounded prompt.
 5. Set concurrency from the resolved configuration, capped by the live Codex `agents.max_threads` and runtime/tool limits.
-6. Call `spawn_agents_on_csv`. Do not manually call `spawn_agent` for every row when the batch primitive exists.
+6. Run `python3 scripts/orchestrate.py <jobs.jsonl>` from the plugin checkout, or `python3 ~/.codex/orchestration/scripts/orchestrate.py <jobs.jsonl>` after personal installation. Use `--dry-run` first for a new batch.
 7. Reap timed-out jobs, retain completed results, and retry only retryable failures up to `max_retries`.
 8. On rate-limit or resource errors, reduce live concurrency by `backoff_factor`, wait for the runtime-provided retry window when present, and resume the queue.
 9. In adaptive-unrestricted mode, increase concurrency gradually after `success_window` clean completions, never above the observed/runtime cap.
-10. Reduce results into a compact manifest and pass only exceptions, summaries, and evidence to the root.
+10. Inspect the atomic manifest and per-attempt logs under `.codex/orchestration-runs/`; pass only exceptions, summaries, and evidence to the root.
 
 ## Safety gates
 
@@ -47,6 +47,10 @@ Never interpret unrestricted as launching all pending jobs simultaneously. An un
 - Preserve partial results so a resumed run does not repeat completed jobs.
 - Never bypass Codex, account, sandbox, or provider limits.
 
+## Routing evidence
+
+The CLI runner proves that the command accepted explicit model/effort configuration. Treat this as **command/config accepted, not runtime-attested**: Codex CLI JSONL currently does not attest the effective route. A future App Server backend may add effective-route attestation.
+
 ## Fallback
 
-If `spawn_agents_on_csv` is unavailable, use a bounded replenishing pool: spawn up to the current cap, wait for a completion, collect and close it, then spawn the next pending job. Do not create one root-thread tool call per item up front.
+If the runner is unavailable, use a bounded replenishing native pool and explicitly report that model and effort are not enforceable through the native spawn interface. Do not create one root-thread tool call per item up front.

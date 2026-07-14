@@ -22,3 +22,10 @@ allow_disjoint_parallel_writers = false
 [collection]
 persist_partial_results = true
 return_raw_logs = false
+
+[runner]
+# CODEX_BIN overrides automatic selection. Otherwise the newest compatible CLI
+# from the ChatGPT/Codex app bundle or PATH is selected.
+backend = "codex-exec"
+run_root = ".codex/orchestration-runs"
+route_attestation = "requested-via-cli-arguments-not-runtime-attested"

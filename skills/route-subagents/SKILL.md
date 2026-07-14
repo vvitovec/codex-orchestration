@@ -27,4 +27,4 @@ Read `references/model-matrix.md` before routing. Choose the least expensive mod
 
 ## Runtime fallback
 
-If named-agent configuration or skill-driven spawning is ignored, restate the selected role, model, effort, scope, and constraints in the spawn prompt. If the runtime still cannot honor the model selection, continue only when the observed model is at least as capable and the cost is acceptable; otherwise report the blocker.
+If exact model/effort launch configuration matters for a homogeneous or resumable job, use the plugin's `scripts/orchestrate.py` CLI runner. It passes both explicitly but must still be labeled command/config accepted, not runtime-attested. For interactive native spawning, restate the selected role, model, effort, scope, and constraints in the prompt; if the runtime cannot honor the selection, continue only when the observed model is at least as capable and the cost is acceptable.

@@ -17,3 +17,8 @@ allow_disjoint_parallel_writers = false
 [collection]
 persist_partial_results = true
 return_raw_logs = false
+
+[runner]
+backend = "codex-exec"
+run_root = ".codex/orchestration-runs"
+route_attestation = "requested-via-cli-arguments-not-runtime-attested"

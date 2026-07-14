@@ -45,7 +45,8 @@ class PackageTests(unittest.TestCase):
 
     def test_scaled_pool_is_programmatic_and_bounded(self):
         text = (ROOT / "skills/scale-agent-pool/SKILL.md").read_text()
-        self.assertIn("spawn_agents_on_csv", text)
+        self.assertIn("scripts/orchestrate.py", text)
+        self.assertIn("command/config accepted, not runtime-attested", text)
         self.assertIn("adaptive-unrestricted", text)
         self.assertIn("Never interpret unrestricted as launching all pending jobs simultaneously", text)
 

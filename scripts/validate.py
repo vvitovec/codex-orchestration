@@ -83,6 +83,20 @@ def validate() -> None:
     if not resolver_path.is_file():
         fail("missing scalable-pool config resolver")
 
+    runner_path = ROOT / "scripts/orchestrate.py"
+    if not runner_path.is_file():
+        fail("missing Codex CLI orchestration runner")
+    runner_text = runner_path.read_text()
+    for value in ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "CODEX_BIN"):
+        if value not in runner_text:
+            fail(f"runner missing route contract: {value}")
+    example_jobs = ROOT / "examples/jobs.read-only.jsonl"
+    if not example_jobs.is_file():
+        fail("missing read-only runner example")
+    installer = (ROOT / "scripts/install-personal.sh").read_text()
+    if "orchestration/scripts" not in installer or "orchestrate.py" not in installer:
+        fail("personal installer does not install the orchestration runner")
+
 
 if __name__ == "__main__":
     try:

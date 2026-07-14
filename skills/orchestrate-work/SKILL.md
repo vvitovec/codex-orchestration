@@ -28,7 +28,7 @@ The root must delegate all edits, generated deliverables, migrations, configurat
 4. Use `$route-subagents` to choose the least expensive reliable agent and effort.
 5. Use `$compose-delegation` for every assignment.
 6. For a normal work graph, spawn independent read-heavy lanes in parallel. Default to at most three initial workers.
-7. For tens or more homogeneous items, invoke `$scale-agent-pool` and use programmatic batch fan-out instead of manual per-item spawning.
+7. For tens or more homogeneous items, invoke `$scale-agent-pool` and use `scripts/orchestrate.py` for durable programmatic fan-out instead of manual per-item spawning.
 8. Keep one active writer unless ownership is provably disjoint. Name the exact disjoint modules before allowing another writer.
 9. Wait for dependencies. Reuse the same worker thread for a focused follow-up on the same deliverable.
 10. Use `$integrate-and-verify` to accept, reject, refine, or escalate each result.
@@ -55,3 +55,9 @@ For each node track: ID, outcome, dependencies, owner scope, read/write mode, se
 - Escalate model tier when failure reflects context, judgment, or recovery difficulty.
 - Stop conflicting writers before integration.
 - Report the observed agent/model behavior when it differs from the requested route.
+
+## Execution routes
+
+- For small interactive graphs, use native subagents and treat model/effort named in prompts as requests unless the runtime reports effective values.
+- For homogeneous or resumable batches, prefer the CLI runner, which passes model and effort explicitly and persists each attempt.
+- CLI routing is command/config accepted, not runtime-attested. Never describe it as proof of the effective backend route.

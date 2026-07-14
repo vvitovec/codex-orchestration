@@ -5,8 +5,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 codex_home=${CODEX_HOME:-"$HOME/.codex"}
 skills_home="$codex_home/skills"
 agents_home="$codex_home/agents"
+runtime_home="$codex_home/orchestration/scripts"
 
-mkdir -p "$skills_home" "$agents_home"
+mkdir -p "$skills_home" "$agents_home" "$runtime_home"
 
 for source in "$root"/skills/*; do
   name=$(basename "$source")
@@ -26,6 +27,14 @@ for source in "$root"/agents/*.toml; do
   fi
 done
 
+for source in "$root"/scripts/orchestrate.py "$root"/scripts/resolve_config.py; do
+  destination="$runtime_home/$(basename "$source")"
+  if [ -e "$destination" ]; then
+    echo "Refusing to overwrite $destination" >&2
+    exit 1
+  fi
+done
+
 for source in "$root"/skills/*; do
   cp -R "$source" "$skills_home/"
 done
@@ -34,6 +43,9 @@ for source in "$root"/agents/*.toml; do
   cp "$source" "$agents_home/"
 done
 
+cp "$root"/scripts/orchestrate.py "$root"/scripts/resolve_config.py "$runtime_home/"
+
 echo "Installed orchestration skills in $skills_home"
 echo "Installed orchestration agents in $agents_home"
+echo "Installed orchestration runner in $runtime_home"
 echo "Restart Codex before using them."

@@ -80,6 +80,30 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(config["pool"]["concurrency"], 6)
             self.assertEqual(len(config["_sources"]), 4)
 
+    def test_parallel_writer_config_requires_boolean_opt_in(self):
+        resolver_spec = importlib.util.spec_from_file_location("resolver_writers", ROOT / "scripts/resolve_config.py")
+        resolver = importlib.util.module_from_spec(resolver_spec)
+        assert resolver_spec.loader
+        resolver_spec.loader.exec_module(resolver)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "parallel.toml"
+            config.write_text(
+                "[pool]\nconcurrency = 2\n"
+                "[writes]\nmax_write_concurrency = 2\n"
+                "allow_disjoint_parallel_writers = false\n"
+            )
+            with self.assertRaisesRegex(ValueError, "must be true"):
+                resolver.resolve(config, cwd=root, codex_home=root / "home")
+            config.write_text(config.read_text().replace("false", "true"))
+            self.assertEqual(
+                resolver.resolve(config, cwd=root, codex_home=root / "home")["writes"]["max_write_concurrency"],
+                2,
+            )
+            config.write_text(config.read_text().replace("true", '"yes"'))
+            with self.assertRaisesRegex(ValueError, "must be a boolean"):
+                resolver.resolve(config, cwd=root, codex_home=root / "home")
+
 
 if __name__ == "__main__":
     unittest.main()

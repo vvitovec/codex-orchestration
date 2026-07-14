@@ -30,7 +30,7 @@ These modes select fixed concurrency defaults. The CLI runner does not currently
 ## Batch protocol
 
 1. Confirm the jobs are homogeneous and independently verifiable.
-2. Materialize JSONL jobs with `id`, `prompt`, `model`, `effort`, `sandbox`, and `workdir` fields. Keep IDs stable across reruns. Add optional `safe_retry: true` only for a provably idempotent writer.
+2. Materialize JSONL jobs with `id`, `prompt`, `model`, `effort`, `sandbox`, and `workdir` fields. Keep IDs stable across reruns. Add optional `safe_retry: true` only for a provably idempotent writer. Parallel writers also require unique, non-empty `ownership_scope` values.
 3. Use only the validated GPT-5.6 Luna/Terra/Sol routes and low/medium/high/xhigh effort.
 4. Encode ownership, verifier, and the requested structured return directly in each bounded prompt.
 5. Set concurrency from the resolved configuration, capped by the live Codex `agents.max_threads` and runtime/tool limits.
@@ -42,8 +42,8 @@ These modes select fixed concurrency defaults. The CLI runner does not currently
 
 ## Safety gates
 
-- Large write batches require disjoint ownership encoded per row.
-- Keep `max_write_concurrency = 1` unless the configuration explicitly opts into disjoint writers and each row has a unique ownership scope.
+- Large write batches require disjoint ownership encoded per row as `ownership_scope`.
+- Keep `max_write_concurrency = 1` unless configuration sets `allow_disjoint_parallel_writers = true`. CLI overrides above one additionally require `--allow-disjoint-parallel-writers`. Every workspace writer then needs a unique, non-empty scope.
 - Stop the batch when a worker requests stop, results indicate shared-state conflict, or verification shows systemic failure.
 - Preserve partial results so a resumed run does not repeat completed jobs.
 - Never bypass Codex, account, sandbox, or provider limits.

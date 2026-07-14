@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -88,6 +89,10 @@ class RunnerTests(unittest.TestCase):
             malformed[field] = ["not", "hashable"]
             with self.assertRaisesRegex(ValueError, "unsupported"):
                 orchestrate.load_jobs(self.write_jobs([malformed]))
+        malformed = self.job()
+        malformed["ownership_scope"] = ["not", "a", "scope"]
+        with self.assertRaisesRegex(ValueError, "ownership_scope"):
+            orchestrate.load_jobs(self.write_jobs([malformed]))
 
     def test_malformed_job_returns_clean_error(self):
         malformed = self.job()
@@ -292,6 +297,77 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"], 2)
         self.assertEqual(plan["retries"], 0)
         self.assertIn("configured-runs", plan["run_dir"])
+
+    def test_cli_parallel_writers_require_explicit_opt_in(self):
+        binary = self.make_codex()
+        writer = self.job(sandbox="workspace-write")
+        writer["ownership_scope"] = "src/a"
+        errors = StringIO()
+        with mock.patch.dict(os.environ, {"CODEX_BIN": str(binary)}), redirect_stderr(errors):
+            result = orchestrate.main([
+                str(self.write_jobs([writer])), "--write-concurrency", "2", "--dry-run",
+            ])
+        self.assertEqual(result, 2)
+        self.assertIn("--allow-disjoint-parallel-writers", errors.getvalue())
+
+    def test_parallel_writers_require_unique_nonempty_scopes(self):
+        binary = self.make_codex()
+        for scopes, expected in (([None, "src/b"], "requires ownership_scope"), (["same", "same"], "duplicate")):
+            with self.subTest(scopes=scopes):
+                jobs = [self.job("one", "workspace-write"), self.job("two", "workspace-write")]
+                for job, scope in zip(jobs, scopes):
+                    if scope is not None:
+                        job["ownership_scope"] = scope
+                errors = StringIO()
+                with mock.patch.dict(os.environ, {"CODEX_BIN": str(binary)}), redirect_stderr(errors):
+                    result = orchestrate.main([
+                        str(self.write_jobs(jobs)), "--write-concurrency", "2",
+                        "--allow-disjoint-parallel-writers", "--dry-run",
+                    ])
+                self.assertEqual(result, 2)
+                self.assertIn(expected, errors.getvalue())
+
+    def test_parallel_writers_with_unique_scopes_are_accepted_and_reach_two(self):
+        binary = self.make_codex()
+        values = [self.job("one", "workspace-write"), self.job("two", "workspace-write")]
+        values[0]["ownership_scope"] = "src/one"
+        values[1]["ownership_scope"] = "src/two"
+        jobs_path = self.write_jobs(values)
+        output = StringIO()
+        with mock.patch.dict(os.environ, {"CODEX_BIN": str(binary)}), redirect_stdout(output):
+            result = orchestrate.main([
+                str(jobs_path), "--write-concurrency", "2",
+                "--allow-disjoint-parallel-writers", "--dry-run",
+            ])
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue())["write_concurrency"], 2)
+
+        jobs = orchestrate.load_jobs(jobs_path)
+        orchestrate.validate_parallel_write_scopes(jobs, 2)
+        active = 0
+        maximum = 0
+        lock = threading.Lock()
+
+        def fake_run(*args):
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return True
+
+        class DummyManifest:
+            def set(self, *args):
+                pass
+
+        with mock.patch.object(orchestrate, "run_job", side_effect=fake_run):
+            self.assertTrue(orchestrate.run_pool(
+                jobs, Path("codex"), self.root, DummyManifest(), 2, 2, 1, 0, 0,
+                orchestrate.ProcessRegistry(),
+            ))
+        self.assertEqual(maximum, 2)
 
     def test_run_directory_lock_rejects_concurrent_owner(self):
         lock_path = self.root / "run/run.lock"

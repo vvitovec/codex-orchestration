@@ -86,6 +86,13 @@ def resolve(
         raise ValueError("writes.max_write_concurrency must be at least 1")
     if write_concurrency > pool["concurrency"]:
         raise ValueError("write concurrency cannot exceed total concurrency")
+    allow_parallel_writers = writes.get("allow_disjoint_parallel_writers")
+    if not isinstance(allow_parallel_writers, bool):
+        raise ValueError("writes.allow_disjoint_parallel_writers must be a boolean")
+    if write_concurrency > 1 and not allow_parallel_writers:
+        raise ValueError(
+            "writes.allow_disjoint_parallel_writers must be true when write concurrency exceeds 1"
+        )
     runner = config.get("runner", {})
     if not isinstance(runner.get("run_root"), str) or not runner["run_root"]:
         raise ValueError("runner.run_root must be a non-empty string")

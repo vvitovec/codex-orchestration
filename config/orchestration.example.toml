@@ -9,6 +9,8 @@ retry_backoff_seconds = 2.0
 
 [writes]
 max_write_concurrency = 1
+# Set this true before configuring max_write_concurrency above 1. Every
+# workspace-write job must then have a unique, non-empty ownership_scope.
 allow_disjoint_parallel_writers = false
 
 [collection]

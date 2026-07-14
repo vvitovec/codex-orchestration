@@ -89,7 +89,8 @@ def validate() -> None:
     runner_text = runner_path.read_text()
     for value in (
         "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "CODEX_BIN",
-        "turn.completed", "RunLock", "final_artifact",
+        "turn.completed", "RunLock", "final_artifact", "ownership_scope",
+        "allow-disjoint-parallel-writers",
     ):
         if value not in runner_text:
             fail(f"runner missing route contract: {value}")

@@ -72,7 +72,7 @@ Choose one mode:
 | `balanced` | Default projects |
 | `large` | A larger fixed pool for independent workers |
 
-Write concurrency remains `1` by default. Enable parallel writers only for provably disjoint ownership scopes.
+Write concurrency remains `1` by default. Configuration with `max_write_concurrency > 1` is rejected unless `allow_disjoint_parallel_writers = true`. A CLI override above one additionally requires `--allow-disjoint-parallel-writers`. Every workspace writer in such a run must provide a unique, non-empty `ownership_scope`.
 
 Configuration is resolved in this order: bundled defaults, `~/.codex/orchestration.toml` (or `$CODEX_HOME/orchestration.toml`), project `.codex/orchestration.toml`, then an explicit `--config` file. Explicit CLI flags take final precedence. The runner consumes concurrency, write concurrency, timeout, retries, retry backoff, and run root from the resolved configuration.
 
@@ -82,6 +82,20 @@ Jobs are strict JSONL. Each line contains a stable `id`, bounded `prompt`, allow
 
 ```json
 {"id":"repo-summary","prompt":"Inspect this repository without editing it. Return its purpose and verification commands.","model":"gpt-5.6-luna","effort":"low","sandbox":"read-only","workdir":"."}
+```
+
+Parallel writer jobs declare disjoint ownership explicitly:
+
+```json
+{"id":"api","prompt":"Implement and verify the bounded API change.","model":"gpt-5.6-terra","effort":"high","sandbox":"workspace-write","workdir":".","ownership_scope":"src/api","safe_retry":false}
+{"id":"docs","prompt":"Update and verify the related documentation.","model":"gpt-5.6-luna","effort":"medium","sandbox":"workspace-write","workdir":".","ownership_scope":"docs","safe_retry":true}
+```
+
+Launch that batch with both the concurrency value and explicit safety opt-in:
+
+```bash
+python3 scripts/orchestrate.py parallel-writers.jsonl \
+  --concurrency 2 --write-concurrency 2 --allow-disjoint-parallel-writers
 ```
 
 Validate the launch plan, then run it:
@@ -99,6 +113,7 @@ The runner:
 - selects the newest compatible Codex CLI (minimum `0.144.2`) from the ChatGPT/Codex app bundle or `PATH`; set `CODEX_BIN=/path/to/codex` to override it;
 - sends prompts over stdin and builds subprocess arguments without a shell;
 - limits total concurrency and keeps one workspace writer by default;
+- rejects parallel writers without explicit opt-in and unique ownership scopes;
 - takes an OS lock on each run directory and terminates active process groups on SIGINT/SIGTERM;
 - writes an atomic manifest, JSONL events, stderr logs, final responses, output hashes/sizes, and discovered thread IDs under `.codex/orchestration-runs/<job-file>/`;
 - accepts success only when the process exits zero, emits `turn.completed`, and creates a non-empty final output;

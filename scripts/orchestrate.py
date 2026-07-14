@@ -123,6 +123,7 @@ class Job:
     sandbox: str
     workdir: Path
     safe_retry: bool = False
+    ownership_scope: str | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -130,6 +131,7 @@ class Job:
             "id": self.id, "prompt": self.prompt, "model": self.model,
             "effort": self.effort, "sandbox": self.sandbox, "workdir": str(self.workdir),
             "safe_retry": self.safe_retry,
+            "ownership_scope": self.ownership_scope,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -138,6 +140,7 @@ class Job:
             "id": self.id, "model": self.model, "effort": self.effort,
             "sandbox": self.sandbox, "workdir": str(self.workdir),
             "safe_retry": self.safe_retry,
+            "ownership_scope": self.ownership_scope,
             "prompt_sha256": hashlib.sha256(self.prompt.encode()).hexdigest(),
         }
 
@@ -146,7 +149,7 @@ def load_jobs(path: Path) -> list[Job]:
     jobs: list[Job] = []
     ids: set[str] = set()
     required = {"id", "prompt", "model", "effort", "sandbox", "workdir"}
-    optional = {"safe_retry"}
+    optional = {"safe_retry", "ownership_scope"}
     for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not raw.strip():
             continue
@@ -176,6 +179,13 @@ def load_jobs(path: Path) -> list[Job]:
         safe_retry = value.get("safe_retry", False)
         if not isinstance(safe_retry, bool):
             raise ValueError(f"{path}:{line_number}: safe_retry must be a boolean")
+        ownership_scope = value.get("ownership_scope")
+        if ownership_scope is not None and (
+            not isinstance(ownership_scope, str) or not ownership_scope.strip()
+        ):
+            raise ValueError(f"{path}:{line_number}: ownership_scope must be null or a non-empty string")
+        if isinstance(ownership_scope, str):
+            ownership_scope = ownership_scope.strip()
         if not isinstance(value["workdir"], str) or not value["workdir"]:
             raise ValueError(f"{path}:{line_number}: workdir must be a path string")
         workdir = Path(value["workdir"]).expanduser()
@@ -186,11 +196,27 @@ def load_jobs(path: Path) -> list[Job]:
         ids.add(job_id)
         jobs.append(Job(
             job_id, value["prompt"], value["model"], value["effort"],
-            value["sandbox"], workdir, safe_retry,
+            value["sandbox"], workdir, safe_retry, ownership_scope,
         ))
     if not jobs:
         raise ValueError(f"{path}: no jobs")
     return jobs
+
+
+def validate_parallel_write_scopes(jobs: Iterable[Job], write_concurrency: int) -> None:
+    if write_concurrency <= 1:
+        return
+    seen: set[str] = set()
+    for job in jobs:
+        if job.sandbox != "workspace-write":
+            continue
+        if not job.ownership_scope:
+            raise ValueError(
+                f"workspace writer {job.id!r} requires ownership_scope when write concurrency exceeds 1"
+            )
+        if job.ownership_scope in seen:
+            raise ValueError(f"duplicate workspace writer ownership_scope: {job.ownership_scope!r}")
+        seen.add(job.ownership_scope)
 
 
 def extract_thread_ids(events_path: Path) -> list[str]:
@@ -561,6 +587,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--concurrency", type=int)
     parser.add_argument("--write-concurrency", type=int)
+    parser.add_argument(
+        "--allow-disjoint-parallel-writers", action="store_true",
+        help="explicitly opt into parallel writers with unique ownership_scope values",
+    )
     parser.add_argument("--timeout", type=int)
     parser.add_argument("--retries", type=int)
     parser.add_argument("--backoff", type=float)
@@ -587,6 +617,31 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("concurrency values must be positive and write concurrency cannot exceed total")
     if timeout < 1 or retries < 0 or backoff < 0:
         parser.error("timeout must be positive; retries and backoff must be non-negative")
+    config_allows_parallel_writers = config["writes"]["allow_disjoint_parallel_writers"]
+    if (
+        args.write_concurrency is not None and args.write_concurrency > 1
+        and not args.allow_disjoint_parallel_writers
+    ):
+        print(
+            "ERROR: --write-concurrency above 1 requires --allow-disjoint-parallel-writers",
+            file=sys.stderr,
+        )
+        return 2
+    parallel_writers_allowed = (
+        config_allows_parallel_writers or args.allow_disjoint_parallel_writers
+    )
+    if write_concurrency > 1 and not parallel_writers_allowed:
+        print(
+            "ERROR: parallel writers require writes.allow_disjoint_parallel_writers=true "
+            "or --allow-disjoint-parallel-writers",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        validate_parallel_write_scopes(jobs, write_concurrency)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     run_root = Path(config["runner"]["run_root"]).expanduser()
     if not run_root.is_absolute():
         run_root = Path.cwd() / run_root
@@ -597,6 +652,7 @@ def main(argv: list[str] | None = None) -> int:
             "route_attestation": ROUTE_ATTESTATION, "run_dir": str(run_dir),
             "config_sources": config["_sources"],
             "concurrency": concurrency, "write_concurrency": write_concurrency,
+            "allow_disjoint_parallel_writers": parallel_writers_allowed,
             "timeout": timeout, "retries": retries, "backoff": backoff,
             "jobs": [job.public_spec() for job in jobs],
         }

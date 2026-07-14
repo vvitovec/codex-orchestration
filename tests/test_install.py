@@ -17,8 +17,10 @@ class InstallerTests(unittest.TestCase):
             subprocess.run([str(INSTALLER)], env=env, check=True, capture_output=True, text=True)
             resolver = codex_home / "orchestration/scripts/resolve_config.py"
             defaults = codex_home / "orchestration/config/defaults.toml"
+            compatibility = codex_home / "orchestration/scripts/toml_compat.py"
             self.assertTrue(resolver.is_file())
             self.assertTrue(defaults.is_file())
+            self.assertTrue(compatibility.is_file())
             result = subprocess.run(
                 ["python3", str(resolver)], env=env, check=True, capture_output=True, text=True
             )

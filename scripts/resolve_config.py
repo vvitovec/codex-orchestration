@@ -4,10 +4,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import tomllib
+import sys
 from pathlib import Path
+from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from toml_compat import load as toml_load  # noqa: E402
+
 REPO_DEFAULTS = SCRIPT_DIR.parent / "skills/scale-agent-pool/references/defaults.toml"
 INSTALLED_DEFAULTS = SCRIPT_DIR.parent / "config/defaults.toml"
 MODES = {"conservative": 2, "balanced": 3, "large": 8}
@@ -25,7 +30,7 @@ def merge(base: dict, override: dict) -> dict:
 
 def load(path: Path) -> dict:
     with path.open("rb") as handle:
-        return tomllib.load(handle)
+        return toml_load(handle)
 
 
 def defaults_path() -> Path:
@@ -36,7 +41,8 @@ def defaults_path() -> Path:
 
 
 def config_paths(
-    explicit: Path | None = None, cwd: Path | None = None, codex_home: Path | None = None,
+    explicit: Optional[Path] = None, cwd: Optional[Path] = None,
+    codex_home: Optional[Path] = None,
 ) -> list[Path]:
     cwd = (cwd or Path.cwd()).resolve()
     if codex_home is None:
@@ -54,7 +60,8 @@ def config_paths(
 
 
 def resolve(
-    path: Path | None = None, cwd: Path | None = None, codex_home: Path | None = None,
+    path: Optional[Path] = None, cwd: Optional[Path] = None,
+    codex_home: Optional[Path] = None,
 ) -> dict:
     config = load(defaults_path())
     overrides: dict = {}

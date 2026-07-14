@@ -2,6 +2,8 @@
 
 A configurable orchestration toolkit for OpenAI Codex and the GPT‑5.6 model family.
 
+Requires Python 3.9 or newer. Python 3.11+ uses the standard-library `tomllib`; Python 3.9–3.10 use the bundled strict parser for the toolkit's configuration subset.
+
 It turns the strongest model into a control plane: the root agent understands the project, divides it into useful deliverables, routes each lane to Luna, Terra, or Sol, supervises the work, and verifies the integrated result. The root does not implement changes itself.
 
 ## Why I built this
@@ -110,7 +112,7 @@ From another project after personal installation, invoke `python3 ~/.codex/orche
 
 The runner:
 
-- selects the newest compatible Codex CLI (minimum `0.144.2`) from the ChatGPT/Codex app bundle or `PATH`; set `CODEX_BIN=/path/to/codex` to override it;
+- selects the newest compatible Codex CLI (minimum `0.144.2`) from the ChatGPT/Codex app bundle, `~/.local/bin/codex`, or `PATH`; set `CODEX_BIN=/path/to/codex` to override it;
 - sends prompts over stdin and builds subprocess arguments without a shell;
 - limits total concurrency and keeps one workspace writer by default;
 - rejects parallel writers without explicit opt-in and unique ownership scopes;

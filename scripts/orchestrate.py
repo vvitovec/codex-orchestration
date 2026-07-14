@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 MODELS = {"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"}
 EFFORTS = {"low", "medium", "high", "xhigh"}
@@ -31,9 +31,10 @@ APP_CODEX_PATHS = (
     Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
     Path("/Applications/Codex.app/Contents/Resources/codex"),
 )
+USER_CODEX_PATH = Path.home() / ".local/bin/codex"
 
 
-def load_config(path: Path | None = None) -> dict[str, Any]:
+def load_config(path: Optional[Path] = None) -> dict[str, Any]:
     resolver_path = Path(__file__).with_name("resolve_config.py")
     spec = importlib.util.spec_from_file_location("orchestration_resolve_config", resolver_path)
     if not spec or not spec.loader:
@@ -86,7 +87,7 @@ def select_codex_binary() -> tuple[Path, str]:
     if override:
         candidates = [Path(override).expanduser()]
     else:
-        candidates = list(APP_CODEX_PATHS)
+        candidates = list(APP_CODEX_PATHS) + [USER_CODEX_PATH]
         path_binary = shutil.which("codex")
         if path_binary:
             candidates.append(Path(path_binary))
@@ -123,7 +124,7 @@ class Job:
     sandbox: str
     workdir: Path
     safe_retry: bool = False
-    ownership_scope: str | None = None
+    ownership_scope: Optional[str] = None
 
     @property
     def fingerprint(self) -> str:
@@ -261,7 +262,7 @@ def has_completed_turn(events_path: Path) -> bool:
     return False
 
 
-def artifact_metadata(path: Path) -> dict[str, Any] | None:
+def artifact_metadata(path: Path) -> Optional[dict[str, Any]]:
     try:
         content = path.read_bytes()
     except OSError:
@@ -406,7 +407,7 @@ class Manifest:
         self.data["updated_at"] = utc_now()
         atomic_json(self.path, self.data)
 
-    def get(self, job_id: str) -> dict[str, Any] | None:
+    def get(self, job_id: str) -> Optional[dict[str, Any]]:
         with self.lock:
             return self.data["jobs"].get(job_id)
 
@@ -580,7 +581,7 @@ def run_pool(
     return all_ok
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("jobs", type=Path, help="JSONL job file")
     parser.add_argument("--config", type=Path, help="highest-precedence TOML configuration")

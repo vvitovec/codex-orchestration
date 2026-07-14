@@ -23,7 +23,8 @@ trap 'rm -rf "$stage"' EXIT HUP INT TERM
 mkdir -p "$stage/skills" "$stage/agents" "$stage/scripts" "$stage/config"
 for source in "$root"/skills/*; do cp -R "$source" "$stage/skills/"; done
 for source in "$root"/agents/*.toml; do cp "$source" "$stage/agents/"; done
-cp "$root/scripts/orchestrate.py" "$root/scripts/resolve_config.py" "$stage/scripts/"
+cp "$root/scripts/orchestrate.py" "$root/scripts/resolve_config.py" \
+  "$root/scripts/toml_compat.py" "$stage/scripts/"
 cp "$root/skills/scale-agent-pool/references/defaults.toml" "$stage/config/defaults.toml"
 
 refuse() {
@@ -58,7 +59,7 @@ for source in "$stage"/agents/*.toml; do
     fi
   fi
 done
-for name in orchestrate.py resolve_config.py; do
+for name in orchestrate.py resolve_config.py toml_compat.py; do
   destination="$runtime_home/$name"
   if [ -e "$destination" ]; then
     [ "$mode" = upgrade ] || refuse "$destination"
@@ -66,8 +67,10 @@ for name in orchestrate.py resolve_config.py; do
       grep -Fxq "orchestration/scripts/$name" "$ownership_file" || refuse "$destination"
     elif [ "$name" = orchestrate.py ]; then
       grep -q "Durable, bounded orchestration" "$destination" || refuse "$destination"
-    else
+    elif [ "$name" = resolve_config.py ]; then
       grep -q "def resolve(" "$destination" || refuse "$destination"
+    else
+      grep -q "FallbackTOMLDecodeError" "$destination" || refuse "$destination"
     fi
   fi
 done
@@ -106,6 +109,7 @@ ownership_tmp="$runtime_root/.owned-paths.$$"
   for source in "$stage"/agents/*.toml; do echo "agents/$(basename "$source")"; done
   echo "orchestration/scripts/orchestrate.py"
   echo "orchestration/scripts/resolve_config.py"
+  echo "orchestration/scripts/toml_compat.py"
   echo "orchestration/config/defaults.toml"
 } > "$ownership_tmp"
 mv "$ownership_tmp" "$ownership_file"

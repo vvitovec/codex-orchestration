@@ -4,10 +4,14 @@ from __future__ import annotations
 import json
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from toml_compat import TOMLDecodeError, loads as toml_loads  # noqa: E402
+
 SKILLS = {
     "orchestrate-work",
     "route-subagents",
@@ -64,7 +68,7 @@ def validate() -> None:
     if actual_agents != set(AGENTS):
         fail(f"agent set mismatch: {actual_agents}")
     for name, expected in AGENTS.items():
-        data = tomllib.loads((ROOT / "agents" / f"{name}.toml").read_text())
+        data = toml_loads((ROOT / "agents" / f"{name}.toml").read_text())
         if data.get("name") != name:
             fail(f"agent name mismatch: {name}")
         observed = (data.get("model"), data.get("model_reasoning_effort"))
@@ -86,6 +90,8 @@ def validate() -> None:
     runner_path = ROOT / "scripts/orchestrate.py"
     if not runner_path.is_file():
         fail("missing Codex CLI orchestration runner")
+    if not (ROOT / "scripts/toml_compat.py").is_file():
+        fail("missing Python 3.9 TOML compatibility parser")
     runner_text = runner_path.read_text()
     for value in (
         "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "CODEX_BIN",
@@ -100,6 +106,7 @@ def validate() -> None:
     installer = (ROOT / "scripts/install-personal.sh").read_text()
     if (
         "orchestration/scripts" not in installer or "orchestrate.py" not in installer
+        or "toml_compat.py" not in installer
         or "config/defaults.toml" not in installer or "--upgrade" not in installer
     ):
         fail("personal installer does not install the orchestration runner")
@@ -108,7 +115,7 @@ def validate() -> None:
 if __name__ == "__main__":
     try:
         validate()
-    except (OSError, ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
+    except (OSError, ValueError, json.JSONDecodeError, TOMLDecodeError) as error:
         print(f"INVALID: {error}", file=sys.stderr)
         raise SystemExit(1)
     print("VALID: Codex orchestration plugin")

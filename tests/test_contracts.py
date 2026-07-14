@@ -35,11 +35,9 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Terra to Sol", text)
 
     def test_agent_write_boundaries(self):
-        import tomllib
-
-        explorer = tomllib.loads((ROOT / "agents/terra-explorer.toml").read_text())
-        reviewer = tomllib.loads((ROOT / "agents/independent-reviewer.toml").read_text())
-        writer = tomllib.loads((ROOT / "agents/terra-worker.toml").read_text())
+        explorer = validator.toml_loads((ROOT / "agents/terra-explorer.toml").read_text())
+        reviewer = validator.toml_loads((ROOT / "agents/independent-reviewer.toml").read_text())
+        writer = validator.toml_loads((ROOT / "agents/terra-worker.toml").read_text())
         self.assertEqual(explorer["sandbox_mode"], "read-only")
         self.assertEqual(reviewer["sandbox_mode"], "read-only")
         self.assertEqual(writer["sandbox_mode"], "workspace-write")

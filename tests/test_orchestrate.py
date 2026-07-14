@@ -116,12 +116,24 @@ class RunnerTests(unittest.TestCase):
     def test_binary_selection_prefers_newest_and_honors_override(self):
         old = self.make_codex("0.144.2")
         new = self.make_codex("0.200.0")
-        with mock.patch.object(orchestrate, "APP_CODEX_PATHS", (old, new)), mock.patch(
-            "shutil.which", return_value=None
-        ), mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.object(orchestrate, "APP_CODEX_PATHS", (old, new)), mock.patch.object(
+            orchestrate, "USER_CODEX_PATH", self.root / "missing-user-codex"
+        ), mock.patch("shutil.which", return_value=None), mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(orchestrate.select_codex_binary()[0], new.resolve())
         with mock.patch.dict(os.environ, {"CODEX_BIN": str(old)}):
             self.assertEqual(orchestrate.select_codex_binary()[0], old.resolve())
+
+    def test_binary_selection_considers_user_local_bin_before_old_path(self):
+        user_binary = self.make_codex("0.144.4")
+        path_binary = self.make_codex("0.120.0")
+        with mock.patch.object(orchestrate, "APP_CODEX_PATHS", ()), mock.patch.object(
+            orchestrate, "USER_CODEX_PATH", user_binary
+        ), mock.patch("shutil.which", return_value=str(path_binary)), mock.patch.dict(
+            os.environ, {}, clear=True
+        ):
+            selected, version = orchestrate.select_codex_binary()
+        self.assertEqual(selected, user_binary.resolve())
+        self.assertEqual(version, "codex-cli 0.144.4")
 
     def test_old_override_is_rejected(self):
         old = self.make_codex("0.100.0")
